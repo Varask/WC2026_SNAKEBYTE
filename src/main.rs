@@ -295,11 +295,69 @@ fn choose_dir(
     Some(chosen)
 }
 
+// === Scoring des objectifs ====================================================
+
+/// Score d'une source d'energie pour un snake donne.
+/// Plus le score est ELEVE, plus la source est attractive.
+///
+/// Composantes :
+///   - distance BFS snake -> source  (penalite : plus c'est loin, moins c'est bien)
+///   - densite locale : nombre de sources dans un rayon BFS `cluster_radius`
+///     autour de la source (bonus : un cluster vaut plus qu'une source isolee)
+///   - proximite ennemie : si un ennemi est plus proche que nous de la source,
+///     pénalite pour eviter de courir apres quelque chose qu'on n'aura pas
+///
+/// Formule (tout en entier pour eviter les flottants) :
+///   score = cluster_bonus * CLUSTER_WEIGHT
+///           - dist_snake  * DIST_WEIGHT
+///           - enemy_ahead * ENEMY_PENALTY
+///
+/// Retourne None si la source est inaccessible.
+fn score_source(
+    source:        Pos,
+    snake_head:    Pos,
+    all_sources:   &[Pos],
+    enemy_heads:   &[Pos],
+    world:         &World,
+    blocked:       &HashSet<Pos>,
+) -> Option<i64> {
+    const CLUSTER_RADIUS: u32 = 5;   // rayon BFS pour compter les voisines
+    const CLUSTER_WEIGHT: i64 = 30;  // bonus par source voisine dans le rayon
+    const DIST_WEIGHT:    i64 = 10;  // penalite par case de distance
+    const ENEMY_PENALTY:  i64 = 50;  // penalite si un ennemi est plus proche
+
+    let dist_snake = bfs_distance(snake_head, source, world, blocked)? as i64;
+
+    // Densite : compter les autres sources accessibles dans le rayon
+    let cluster_bonus = all_sources.iter()
+        .filter(|&&other| other != source)
+        .filter(|&&other| {
+            bfs_distance(source, other, world, blocked)
+                .map(|d| d <= CLUSTER_RADIUS)
+                .unwrap_or(false)
+        })
+        .count() as i64;
+
+    // Penalite si un ennemi est plus proche de cette source que nous
+    let enemy_closer = enemy_heads.iter().any(|&eh| {
+        bfs_distance(eh, source, world, blocked)
+            .map(|d| (d as i64) < dist_snake)
+            .unwrap_or(false)
+    });
+
+    let score = cluster_bonus * CLUSTER_WEIGHT
+        - dist_snake * DIST_WEIGHT
+        - if enemy_closer { ENEMY_PENALTY } else { 0 };
+
+    Some(score)
+}
+
 // === Attribution des objectifs ================================================
 
 fn assign_objectives(
     my_snakes:     &[(i32, Pos)],
     power_sources: &[Pos],
+    enemy_heads:   &[Pos],
     world:         &World,
     blocked:       &HashSet<Pos>,
 ) -> HashMap<i32, Pos> {
@@ -310,11 +368,17 @@ fn assign_objectives(
     snakes.sort_by_key(|(id, _)| *id);
 
     for (id, head) in &snakes {
+        // Trouver la source libre avec le meilleur score
         let best = power_sources.iter()
             .filter(|&&ps| !taken.contains(&ps))
-            .min_by_key(|&&ps| bfs_distance(*head, ps, world, blocked).unwrap_or(u32::MAX));
+            .filter_map(|&ps| {
+                let s = score_source(ps, *head, power_sources, enemy_heads, world, blocked)?;
+                Some((ps, s))
+            })
+            .max_by_key(|&(_, s)| s);
 
-        if let Some(&target) = best {
+        if let Some((target, score)) = best {
+            eprintln!("  Snake {} -> {:?} (score {})", id, target, score);
             assignments.insert(*id, target);
             taken.insert(target);
         }
@@ -445,7 +509,7 @@ fn main() {
             .filter(|&&ps| !assigned_targets.contains(&ps))
             .copied().collect();
 
-        let new_assignments = assign_objectives(&unassigned, &free_sources, &world, &blocked);
+        let new_assignments = assign_objectives(&unassigned, &free_sources, &enemy_heads, &world, &blocked);
         for (id, target) in new_assignments {
             eprintln!("Snake {} -> objectif {:?}", id, target);
             current_objectives.insert(id, target);
