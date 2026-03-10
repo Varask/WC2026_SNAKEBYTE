@@ -351,10 +351,10 @@ fn compute_scores(
     world:         &World,
     blocked:       &HashSet<Pos>,
 ) -> HashMap<(i32, Pos), i64> {
-    const CLUSTER_RADIUS: u32 = 5;   // rayon Manhattan pour compter les voisines
-    const CLUSTER_WEIGHT: i64 = 30;  // bonus par source voisine
-    const DIST_WEIGHT:    i64 = 10;  // penalite par case de distance BFS
-    const ENEMY_PENALTY:  i64 = 50;  // penalite si ennemi plus proche
+    const CLUSTER_RADIUS: u32 = 4;   // rayon Manhattan pour compter les voisines
+    const CLUSTER_WEIGHT: i64 = 20;  // bonus par source voisine dans le rayon
+    const DIST_WEIGHT:    i64 = 50;  // penalite par case de distance BFS (prio proximite)
+    const ENEMY_PENALTY:  i64 = 80;  // penalite si ennemi plus proche
 
     // Un BFS par snake depuis sa tete
     let snake_dists: Vec<(i32, HashMap<Pos, u32>)> = my_snakes.iter()
@@ -551,33 +551,61 @@ fn main() {
         }
 
         // --- Actions avec reservation progressive ----------------------------
-        // working_blocked contient uniquement :
-        //   - les murs (via world)
-        //   - les corps ENNEMIS (obstacles reels)
-        //   - les corps ALLIES (obstacles reels, mais queues retirées)
-        //   - les futures tetes reservees au fur et a mesure
-        //
-        // Les corps alliés sont inclus mais leurs queues sont retirées car
-        // elles se liberent au prochain tour. Cela permet aux snakes empiles
-        // de se "voir" sans se bloquer mutuellement inutilement.
+        // working_blocked = tous les corps, queues retirees (elles se liberent).
+        // On traite les snakes par ordre croissant d'ID. Apres chaque decision,
+        // la future tete est inseree dans working_blocked pour que les snakes
+        // suivants l'evitent => evite les collisions tete-a-tete entre allies.
         let mut actions: Vec<String> = Vec::new();
 
-        // Construire working_blocked : tous les corps, queues alliees retirées
+        // Base : tous les corps, queues retirees
         let mut working_blocked: HashSet<Pos> = HashSet::new();
-        for (sid, body) in &snakebots {
-            for &pos in body {
-                working_blocked.insert(pos);
-            }
-            // Retirer la queue de chaque snake (allie ou ennemi) : elle se libere
-            if let Some(&tail) = body.last() {
-                working_blocked.remove(&tail);
-            }
+        for (_sid, body) in &snakebots {
+            for &pos in body { working_blocked.insert(pos); }
+            if let Some(&tail) = body.last() { working_blocked.remove(&tail); }
         }
 
+        // Passe 1 : estimer la prochaine position de chaque snake allie
+        // (on suppose qu'il continue dans la direction de son objectif ou
+        //  dans la premiere direction libre). Ces estimations sont inserees
+        //  dans working_blocked AVANT la passe 2 pour que chaque snake
+        //  planifie en evitant les futures tetes de tous ses allies.
         let mut ordered_snakes = my_snakes.clone();
         ordered_snakes.sort_by_key(|(id, _)| *id);
 
+        let mut estimated_next: HashMap<i32, Pos> = HashMap::new();
+        {
+            let mut est_blocked = working_blocked.clone();
+            for (id, head) in &ordered_snakes {
+                let own_body: Vec<Pos> = snakebots.iter()
+                    .find(|(sid, _)| sid == id)
+                    .map(|(_, body)| body.clone())
+                    .unwrap_or_default();
+                let target = current_objectives.get(id).copied();
+                // Estimation rapide : BFS sans contrainte danger
+                let est_dir = target
+                    .and_then(|goal| bfs(*head, goal, &world, &est_blocked))
+                    .or_else(|| fallback_dir(*head, &world, &est_blocked, &danger));
+                if let Some(d) = est_dir {
+                    if let Some(next) = d.apply(*head, world.width, world.height) {
+                        estimated_next.insert(*id, next);
+                        est_blocked.insert(next); // bloquer pour les suivants deja en passe 1
+                    }
+                }
+            }
+        }
+        // Ajouter toutes les estimations dans working_blocked
+        for &next in estimated_next.values() {
+            working_blocked.insert(next);
+        }
+
+        // Passe 2 : calcul definitif avec working_blocked complet
         for (id, head) in &ordered_snakes {
+            // Retirer l'estimation de CE snake pour qu'il puisse planifier
+            // sans se bloquer lui-meme
+            if let Some(&own_est) = estimated_next.get(id) {
+                working_blocked.remove(&own_est);
+            }
+
             let own_body: Vec<Pos> = snakebots.iter()
                 .find(|(sid, _)| sid == id)
                 .map(|(_, body)| body.clone())
@@ -592,12 +620,16 @@ fn main() {
 
             if let Some(d) = dir {
                 if let Some(next_head) = d.apply(*head, world.width, world.height) {
-                    // Reserver la future tete : les snakes suivants ne peuvent
-                    // pas aller sur cette case
+                    // Remplacer l'estimation par la decision reelle
                     working_blocked.insert(next_head);
-                    eprintln!("Snake {} : {} (reserve {:?})", id, d.to_str(), next_head);
+                    eprintln!("Snake {} : {} (next {:?})", id, d.to_str(), next_head);
                 }
                 actions.push(format!("{} {}", id, d.to_str()));
+            } else {
+                // Remettre l'estimation si ce snake ne bouge pas
+                if let Some(&own_est) = estimated_next.get(id) {
+                    working_blocked.insert(own_est);
+                }
             }
         }
 
