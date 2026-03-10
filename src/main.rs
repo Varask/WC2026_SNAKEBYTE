@@ -468,8 +468,6 @@ fn main() {
         // --- Invalidation des objectifs inaccessibles ------------------------
         // Un objectif est inaccessible si aucun chemin BFS n'existe depuis
         // la tete du snake jusqu'a la cible (sans contrainte de danger).
-        // Les positions inaccessibles sont marquees avec MARK dans le viewer.
-        let mut mark_positions: Vec<Pos> = Vec::new();
         {
             let mut to_invalidate: Vec<i32> = Vec::new();
             for (&id, &target) in &current_objectives {
@@ -489,9 +487,6 @@ fn main() {
                 if bfs_distance(head, target, &world, &local_blocked).is_none() {
                     eprintln!("Snake {} : objectif {:?} INACCESSIBLE, invalidation", id, target);
                     to_invalidate.push(id);
-                    if mark_positions.len() < 4 {
-                        mark_positions.push(target);
-                    }
                 }
             }
             for id in to_invalidate {
@@ -547,17 +542,10 @@ fn main() {
             }
         }
 
-        // Construire la sortie : actions + MARK des objectifs inaccessibles
-        // Le protocole accepte MARK x y comme commande independante separee par ;
-        let mut output_parts: Vec<String> = actions;
-        for pos in &mark_positions {
-            output_parts.push(format!("MARK {} {}", pos.x, pos.y));
-        }
-
-        if output_parts.is_empty() {
+        if actions.is_empty() {
             println!("WAIT");
         } else {
-            println!("{}", output_parts.join(";"));
+            println!("{}", actions.join(";"));
         }
     }
 }
