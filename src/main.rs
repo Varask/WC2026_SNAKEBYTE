@@ -401,6 +401,40 @@ fn main() {
             for id in to_remove { current_objectives.remove(&id); }
         }
 
+        // --- Invalidation des objectifs inaccessibles ------------------------
+        // Un objectif est inaccessible si aucun chemin BFS n'existe depuis
+        // la tete du snake jusqu'a la cible (sans contrainte de danger).
+        // Les positions inaccessibles sont marquees avec MARK dans le viewer.
+        let mut mark_positions: Vec<Pos> = Vec::new();
+        {
+            let mut to_invalidate: Vec<i32> = Vec::new();
+            for (&id, &target) in &current_objectives {
+                let head = match my_snakes.iter().find(|(sid, _)| *sid == id) {
+                    Some((_, h)) => *h,
+                    None => continue,
+                };
+                let own_body: Vec<Pos> = snakebots.iter()
+                    .find(|(sid, _)| *sid == id)
+                    .map(|(_, b)| b.clone())
+                    .unwrap_or_default();
+                let mut local_blocked = blocked.clone();
+                local_blocked.remove(&head);
+                if let Some(&tail) = own_body.last() {
+                    local_blocked.remove(&tail);
+                }
+                if bfs_distance(head, target, &world, &local_blocked).is_none() {
+                    eprintln!("Snake {} : objectif {:?} INACCESSIBLE, invalidation", id, target);
+                    to_invalidate.push(id);
+                    if mark_positions.len() < 4 {
+                        mark_positions.push(target);
+                    }
+                }
+            }
+            for id in to_invalidate {
+                current_objectives.remove(&id);
+            }
+        }
+
         // --- Nouveaux objectifs -----------------------------------------------
         let unassigned: Vec<(i32, Pos)> = my_snakes.iter()
             .filter(|(id, _)| !current_objectives.contains_key(id))
@@ -449,10 +483,17 @@ fn main() {
             }
         }
 
-        if actions.is_empty() {
+        // Construire la sortie : actions + MARK des objectifs inaccessibles
+        // Le protocole accepte MARK x y comme commande independante separee par ;
+        let mut output_parts: Vec<String> = actions;
+        for pos in &mark_positions {
+            output_parts.push(format!("MARK {} {}", pos.x, pos.y));
+        }
+
+        if output_parts.is_empty() {
             println!("WAIT");
         } else {
-            println!("{}", actions.join(";"));
+            println!("{}", output_parts.join(";"));
         }
     }
 }
