@@ -250,7 +250,9 @@ fn choose_dir(
 ) -> Option<Dir> {
     // Blocked local : retire la tete et la queue propres
     let mut local_blocked = blocked.clone();
-    local_blocked.remove(&head);
+    // Ne retirer que la queue : elle se libere quand le snake avance.
+    // La tete NE doit PAS etre retiree : le BFS part de head via visited,
+    // la retirer autoriserait a repasser sur la case actuelle (demi-tour).
     if let Some(&tail) = own_body.last() {
         local_blocked.remove(&tail);
     }
@@ -297,59 +299,100 @@ fn choose_dir(
 
 // === Scoring des objectifs ====================================================
 
-/// Score d'une source d'energie pour un snake donne.
-/// Plus le score est ELEVE, plus la source est attractive.
+/// Distance de Manhattan entre deux positions (pas de BFS, O(1)).
+fn manhattan(a: Pos, b: Pos) -> u32 {
+    ((a.x as i32 - b.x as i32).abs() + (a.y as i32 - b.y as i32).abs()) as u32
+}
+
+/// BFS multi-sources : retourne une map Pos -> distance minimale depuis
+/// n'importe laquelle des `origins`. Un seul BFS pour toutes les origines.
+/// Complexite : O(W x H) quel que soit le nombre d'origines.
+fn bfs_multi(
+    origins: &[Pos],
+    world:   &World,
+    blocked: &HashSet<Pos>,
+) -> HashMap<Pos, u32> {
+    let mut dist: HashMap<Pos, u32> = HashMap::new();
+    let mut queue: VecDeque<(Pos, u32)> = VecDeque::new();
+    for &o in origins {
+        if !blocked.contains(&o) && !world.is_wall(o) {
+            dist.insert(o, 0);
+            queue.push_back((o, 0));
+        }
+    }
+    while let Some((pos, d)) = queue.pop_front() {
+        for &dir in &Dir::all() {
+            if let Some(next) = dir.apply(pos, world.width, world.height) {
+                if !world.is_wall(next) && !blocked.contains(&next) && !dist.contains_key(&next) {
+                    dist.insert(next, d + 1);
+                    queue.push_back((next, d + 1));
+                }
+            }
+        }
+    }
+    dist
+}
+
+/// Calcule le score de chaque source candidate pour chaque snake.
 ///
-/// Composantes :
-///   - distance BFS snake -> source  (penalite : plus c'est loin, moins c'est bien)
-///   - densite locale : nombre de sources dans un rayon BFS `cluster_radius`
-///     autour de la source (bonus : un cluster vaut plus qu'une source isolee)
-///   - proximite ennemie : si un ennemi est plus proche que nous de la source,
-///     pénalite pour eviter de courir apres quelque chose qu'on n'aura pas
+/// Toute la phase de scoring tient en un nombre fixe de BFS :
+///   - 1 BFS par snake (distances snake -> toutes cases)
+///   - 1 BFS multi-sources depuis toutes les tetes ennemies
+/// Puis le cluster bonus utilise la distance de Manhattan (O(1) par paire).
 ///
-/// Formule (tout en entier pour eviter les flottants) :
-///   score = cluster_bonus * CLUSTER_WEIGHT
-///           - dist_snake  * DIST_WEIGHT
-///           - enemy_ahead * ENEMY_PENALTY
-///
-/// Retourne None si la source est inaccessible.
-fn score_source(
-    source:        Pos,
-    snake_head:    Pos,
-    all_sources:   &[Pos],
+/// Composantes du score (plus haut = plus attractif) :
+///   cluster_bonus  : sources voisines dans un rayon Manhattan (densite locale)
+///   dist_snake     : distance BFS du snake jusqu'a la source (penalite)
+///   enemy_closer   : penalite si un ennemi arrive avant nous
+fn compute_scores(
+    my_snakes:     &[(i32, Pos)],
+    power_sources: &[Pos],
     enemy_heads:   &[Pos],
     world:         &World,
     blocked:       &HashSet<Pos>,
-) -> Option<i64> {
-    const CLUSTER_RADIUS: u32 = 5;   // rayon BFS pour compter les voisines
-    const CLUSTER_WEIGHT: i64 = 30;  // bonus par source voisine dans le rayon
-    const DIST_WEIGHT:    i64 = 10;  // penalite par case de distance
-    const ENEMY_PENALTY:  i64 = 50;  // penalite si un ennemi est plus proche
+) -> HashMap<(i32, Pos), i64> {
+    const CLUSTER_RADIUS: u32 = 5;   // rayon Manhattan pour compter les voisines
+    const CLUSTER_WEIGHT: i64 = 30;  // bonus par source voisine
+    const DIST_WEIGHT:    i64 = 10;  // penalite par case de distance BFS
+    const ENEMY_PENALTY:  i64 = 50;  // penalite si ennemi plus proche
 
-    let dist_snake = bfs_distance(snake_head, source, world, blocked)? as i64;
+    // Un BFS par snake depuis sa tete
+    let snake_dists: Vec<(i32, HashMap<Pos, u32>)> = my_snakes.iter()
+        .map(|&(id, head)| (id, bfs_multi(&[head], world, blocked)))
+        .collect();
 
-    // Densite : compter les autres sources accessibles dans le rayon
-    let cluster_bonus = all_sources.iter()
-        .filter(|&&other| other != source)
-        .filter(|&&other| {
-            bfs_distance(source, other, world, blocked)
-                .map(|d| d <= CLUSTER_RADIUS)
-                .unwrap_or(false)
+    // Un seul BFS multi-sources pour tous les ennemis
+    let enemy_dist_map = bfs_multi(enemy_heads, world, blocked);
+
+    // Densite de chaque source : nombre de sources voisines a rayon Manhattan
+    let cluster: HashMap<Pos, i64> = power_sources.iter()
+        .map(|&src| {
+            let count = power_sources.iter()
+                .filter(|&&other| other != src && manhattan(src, other) <= CLUSTER_RADIUS)
+                .count() as i64;
+            (src, count)
         })
-        .count() as i64;
+        .collect();
 
-    // Penalite si un ennemi est plus proche de cette source que nous
-    let enemy_closer = enemy_heads.iter().any(|&eh| {
-        bfs_distance(eh, source, world, blocked)
-            .map(|d| (d as i64) < dist_snake)
-            .unwrap_or(false)
-    });
-
-    let score = cluster_bonus * CLUSTER_WEIGHT
-        - dist_snake * DIST_WEIGHT
-        - if enemy_closer { ENEMY_PENALTY } else { 0 };
-
-    Some(score)
+    // Assembler les scores
+    let mut scores = HashMap::new();
+    for &(id, head) in my_snakes {
+        let dmap = snake_dists.iter().find(|(sid, _)| *sid == id).map(|(_, m)| m);
+        for &src in power_sources {
+            if let Some(dist_snake) = dmap.and_then(|m| m.get(&src)).copied() {
+                let dist_snake = dist_snake as i64;
+                let cluster_bonus = cluster.get(&src).copied().unwrap_or(0);
+                let enemy_d = enemy_dist_map.get(&src).copied().unwrap_or(u32::MAX) as i64;
+                let enemy_closer = !enemy_heads.is_empty() && enemy_d < dist_snake;
+                let score = cluster_bonus * CLUSTER_WEIGHT
+                    - dist_snake * DIST_WEIGHT
+                    - if enemy_closer { ENEMY_PENALTY } else { 0 };
+                scores.insert((id, src), score);
+            }
+            // Si non present dans dmap : inaccessible, pas insere => filtre naturel
+        }
+    }
+    scores
 }
 
 // === Attribution des objectifs ================================================
@@ -361,20 +404,18 @@ fn assign_objectives(
     world:         &World,
     blocked:       &HashSet<Pos>,
 ) -> HashMap<i32, Pos> {
+    let scores = compute_scores(my_snakes, power_sources, enemy_heads, world, blocked);
+
     let mut assignments: HashMap<i32, Pos> = HashMap::new();
     let mut taken: HashSet<Pos> = HashSet::new();
 
     let mut snakes = my_snakes.to_vec();
     snakes.sort_by_key(|(id, _)| *id);
 
-    for (id, head) in &snakes {
-        // Trouver la source libre avec le meilleur score
+    for (id, _head) in &snakes {
         let best = power_sources.iter()
             .filter(|&&ps| !taken.contains(&ps))
-            .filter_map(|&ps| {
-                let s = score_source(ps, *head, power_sources, enemy_heads, world, blocked)?;
-                Some((ps, s))
-            })
+            .filter_map(|&ps| scores.get(&(*id, ps)).map(|&s| (ps, s)))
             .max_by_key(|&(_, s)| s);
 
         if let Some((target, score)) = best {
@@ -480,7 +521,6 @@ fn main() {
                     .map(|(_, b)| b.clone())
                     .unwrap_or_default();
                 let mut local_blocked = blocked.clone();
-                local_blocked.remove(&head);
                 if let Some(&tail) = own_body.last() {
                     local_blocked.remove(&tail);
                 }
