@@ -111,6 +111,7 @@ fn create_power_source_ov(
 
 
 fn main() {
+
     let my_id = read_int();
     let width = read_int();
     let height = read_int();
