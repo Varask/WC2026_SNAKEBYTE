@@ -1,0 +1,6 @@
+[package]
+name = "WC2026_SNAKEBYTE"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
