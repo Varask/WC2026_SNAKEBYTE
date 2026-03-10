@@ -248,11 +248,11 @@ fn choose_dir(
     blocked:  &HashSet<Pos>,
     danger:   &HashSet<Pos>,
 ) -> Option<Dir> {
-    // Blocked local : retire la tete et la queue propres
-    let mut local_blocked = blocked.clone();
-    // Ne retirer que la queue : elle se libere quand le snake avance.
+    // `blocked` a deja les queues retirees par l'appelant (working_blocked).
+    // On retire quand meme la queue propre par securite (idempotent).
     // La tete NE doit PAS etre retiree : le BFS part de head via visited,
     // la retirer autoriserait a repasser sur la case actuelle (demi-tour).
+    let mut local_blocked = blocked.clone();
     if let Some(&tail) = own_body.last() {
         local_blocked.remove(&tail);
     }
@@ -551,10 +551,28 @@ fn main() {
         }
 
         // --- Actions avec reservation progressive ----------------------------
-        // Chaque snake, une fois son mouvement decide, reserve sa future tete
-        // dans working_blocked pour que les snakes traites apres l'evitent.
+        // working_blocked contient uniquement :
+        //   - les murs (via world)
+        //   - les corps ENNEMIS (obstacles reels)
+        //   - les corps ALLIES (obstacles reels, mais queues retirées)
+        //   - les futures tetes reservees au fur et a mesure
+        //
+        // Les corps alliés sont inclus mais leurs queues sont retirées car
+        // elles se liberent au prochain tour. Cela permet aux snakes empiles
+        // de se "voir" sans se bloquer mutuellement inutilement.
         let mut actions: Vec<String> = Vec::new();
-        let mut working_blocked = blocked.clone();
+
+        // Construire working_blocked : tous les corps, queues alliees retirées
+        let mut working_blocked: HashSet<Pos> = HashSet::new();
+        for (sid, body) in &snakebots {
+            for &pos in body {
+                working_blocked.insert(pos);
+            }
+            // Retirer la queue de chaque snake (allie ou ennemi) : elle se libere
+            if let Some(&tail) = body.last() {
+                working_blocked.remove(&tail);
+            }
+        }
 
         let mut ordered_snakes = my_snakes.clone();
         ordered_snakes.sort_by_key(|(id, _)| *id);
@@ -574,7 +592,8 @@ fn main() {
 
             if let Some(d) = dir {
                 if let Some(next_head) = d.apply(*head, world.width, world.height) {
-                    // Reserver la future tete pour les snakes traites apres
+                    // Reserver la future tete : les snakes suivants ne peuvent
+                    // pas aller sur cette case
                     working_blocked.insert(next_head);
                     eprintln!("Snake {} : {} (reserve {:?})", id, d.to_str(), next_head);
                 }
