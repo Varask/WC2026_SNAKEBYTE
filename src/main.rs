@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufRead};
 
-// ─── Lecture stdin ──────────────────────────────────────────────────────────
+// === Lecture stdin =============================================================
 
 fn read_line() -> String {
     let stdin = io::stdin();
@@ -21,7 +21,7 @@ fn read_ints() -> Vec<i32> {
         .collect()
 }
 
-// ─── Types de base ───────────────────────────────────────────────────────────
+// === Types de base =============================================================
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct Pos {
@@ -53,7 +53,6 @@ impl Dir {
         }
     }
 
-    /// Applique la direction à une position, retourne None si hors-grille
     fn apply(self, pos: Pos, width: usize, height: usize) -> Option<Pos> {
         let (nx, ny) = match self {
             Dir::Up    => (pos.x as isize,     pos.y as isize - 1),
@@ -73,7 +72,7 @@ impl Dir {
     }
 }
 
-// ─── Parse ───────────────────────────────────────────────────────────────────
+// === Parse =====================================================================
 
 fn parse_body(body: &str) -> Vec<Pos> {
     body.split(':')
@@ -86,7 +85,7 @@ fn parse_body(body: &str) -> Vec<Pos> {
         .collect()
 }
 
-// ─── État du monde ───────────────────────────────────────────────────────────
+// === World ====================================================================
 
 struct World {
     width:  usize,
@@ -112,11 +111,10 @@ impl World {
     }
 }
 
-// ─── BFS ─────────────────────────────────────────────────────────────────────
+// === BFS ======================================================================
 
-/// Retourne la première direction à prendre depuis `start` pour atteindre `goal`,
-/// en évitant les cases bloquées (`blocked`).
-/// Retourne None si aucun chemin n'existe.
+/// Retourne la premiere direction vers `goal` depuis `start`,
+/// en evitant `blocked`. None si deja sur place ou pas de chemin.
 fn bfs(
     start:   Pos,
     goal:    Pos,
@@ -124,13 +122,11 @@ fn bfs(
     blocked: &HashSet<Pos>,
 ) -> Option<Dir> {
     if start == goal {
-        return None; // déjà sur l'objectif
+        return None;
     }
 
     let mut visited: HashSet<Pos> = HashSet::new();
-    // (position, première direction prise depuis start)
     let mut queue: VecDeque<(Pos, Dir)> = VecDeque::new();
-
     visited.insert(start);
 
     for &dir in &Dir::all() {
@@ -156,10 +152,10 @@ fn bfs(
         }
     }
 
-    None // pas de chemin
+    None
 }
 
-/// Distance BFS depuis `start` vers `goal` (pour comparer les distances entre snakes).
+/// Distance BFS de `start` a `goal`. None si inaccessible.
 fn bfs_distance(
     start:   Pos,
     goal:    Pos,
@@ -172,7 +168,6 @@ fn bfs_distance(
 
     let mut visited: HashSet<Pos> = HashSet::new();
     let mut queue: VecDeque<(Pos, u32)> = VecDeque::new();
-
     visited.insert(start);
     queue.push_back((start, 0));
 
@@ -193,32 +188,131 @@ fn bfs_distance(
     None
 }
 
-// ─── Attribution des objectifs ────────────────────────────────────────────────
+// === Zones de danger ==========================================================
 
-/// Assigne chaque snake "my" à une source d'énergie différente.
-/// Chaque source ne peut être attribuée qu'à un seul snake.
-/// Retourne une map snake_id → position cible.
-fn assign_objectives(
-    my_snakes: &[(i32, Pos)],      // (id, tête)
-    power_sources: &[Pos],
-    world: &World,
+/// Cases dans lesquelles une tete ennemie peut se deplacer au prochain tour.
+/// On inclut la tete elle-meme (collision frontale) et tous ses voisins libres.
+fn enemy_danger_zone(enemy_heads: &[Pos], world: &World) -> HashSet<Pos> {
+    let mut danger = HashSet::new();
+    for &head in enemy_heads {
+        danger.insert(head);
+        for &dir in &Dir::all() {
+            if let Some(next) = dir.apply(head, world.width, world.height) {
+                if !world.is_wall(next) {
+                    danger.insert(next);
+                }
+            }
+        }
+    }
+    danger
+}
+
+// === Direction de repli =======================================================
+
+/// Choisit la meilleure direction sure disponible.
+/// Prefere les cases hors danger ennemi ; accepte le danger en dernier recours.
+fn fallback_dir(
+    head:    Pos,
+    world:   &World,
     blocked: &HashSet<Pos>,
+    danger:  &HashSet<Pos>,
+) -> Option<Dir> {
+    let safe: Vec<Dir> = Dir::all().iter().filter(|&&dir| {
+        dir.apply(head, world.width, world.height)
+            .map(|next| !world.is_wall(next) && !blocked.contains(&next))
+            .unwrap_or(false)
+    }).copied().collect();
+
+    safe.iter()
+        .find(|&&dir| {
+            dir.apply(head, world.width, world.height)
+                .map(|next| !danger.contains(&next))
+                .unwrap_or(false)
+        })
+        .or_else(|| safe.first())
+        .copied()
+}
+
+// === Choix de direction avec evitement des collisions =========================
+
+/// Choisit la direction optimale pour un snake en tenant compte :
+///   - du chemin BFS vers la cible
+///   - de la zone de danger ennemie (cases evitees en priorite)
+///   - des reservations des snakes allies deja traites (dans `blocked`)
+fn choose_dir(
+    id:       i32,
+    head:     Pos,
+    own_body: &[Pos],
+    target:   Option<Pos>,
+    world:    &World,
+    blocked:  &HashSet<Pos>,
+    danger:   &HashSet<Pos>,
+) -> Option<Dir> {
+    // Blocked local : retire la tete et la queue propres
+    let mut local_blocked = blocked.clone();
+    local_blocked.remove(&head);
+    if let Some(&tail) = own_body.last() {
+        local_blocked.remove(&tail);
+    }
+
+    // 1) BFS vers la cible en evitant aussi la zone de danger
+    let dir_safe = target.and_then(|goal| {
+        let mut bd = local_blocked.clone();
+        for &d in danger.iter() { bd.insert(d); }
+        bfs(head, goal, world, &bd)
+    });
+
+    // 2) BFS vers la cible sans contrainte de danger (chemin de secours)
+    let dir_any = target.and_then(|goal| bfs(head, goal, world, &local_blocked));
+
+    // Choisir la meilleure option disponible
+    let chosen = match dir_safe.or(dir_any) {
+        Some(d) => {
+            // Si la direction BFS atterrit dans le danger ET qu'un fallback
+            // sur sans danger existe, le privilegier
+            let next = d.apply(head, world.width, world.height);
+            let in_danger = next.map(|p| danger.contains(&p)).unwrap_or(false);
+            if in_danger {
+                fallback_dir(head, world, &local_blocked, danger)
+                    .map(|safe_d| {
+                        eprintln!("Snake {} : BFS dangereux ({}), fallback -> {}", id, d.to_str(), safe_d.to_str());
+                        safe_d
+                    })
+                    .unwrap_or_else(|| {
+                        eprintln!("Snake {} : force dans le danger ({})", id, d.to_str());
+                        d
+                    })
+            } else {
+                d
+            }
+        }
+        None => {
+            eprintln!("Snake {} : pas de chemin BFS, fallback", id);
+            fallback_dir(head, world, &local_blocked, danger)?
+        }
+    };
+
+    Some(chosen)
+}
+
+// === Attribution des objectifs ================================================
+
+fn assign_objectives(
+    my_snakes:     &[(i32, Pos)],
+    power_sources: &[Pos],
+    world:         &World,
+    blocked:       &HashSet<Pos>,
 ) -> HashMap<i32, Pos> {
     let mut assignments: HashMap<i32, Pos> = HashMap::new();
     let mut taken: HashSet<Pos> = HashSet::new();
 
-    // Trier les snakes par id pour un ordre déterministe
     let mut snakes = my_snakes.to_vec();
     snakes.sort_by_key(|(id, _)| *id);
 
     for (id, head) in &snakes {
-        // Trouver la source la plus proche non encore prise
-        let best = power_sources
-            .iter()
+        let best = power_sources.iter()
             .filter(|&&ps| !taken.contains(&ps))
-            .min_by_key(|&&ps| {
-                bfs_distance(*head, ps, world, blocked).unwrap_or(u32::MAX)
-            });
+            .min_by_key(|&&ps| bfs_distance(*head, ps, world, blocked).unwrap_or(u32::MAX));
 
         if let Some(&target) = best {
             assignments.insert(*id, target);
@@ -229,40 +323,16 @@ fn assign_objectives(
     assignments
 }
 
-// ─── Direction de repli (éviter les murs/corps) ───────────────────────────────
-
-/// Si le pathfinding échoue, choisit une direction sûre au hasard (première valide).
-fn fallback_dir(head: Pos, world: &World, blocked: &HashSet<Pos>) -> Option<Dir> {
-    Dir::all().iter().find(|&&dir| {
-        if let Some(next) = dir.apply(head, world.width, world.height) {
-            !world.is_wall(next) && !blocked.contains(&next)
-        } else {
-            false
-        }
-    }).copied()
-}
-
-// ─── Sortie ───────────────────────────────────────────────────────────────────
-
-fn output_action(snake_id: i32, dir: Option<Dir>) {
-    match dir {
-        Some(d) => println!("{} {}", snake_id, d.to_str()),
-        None    => println!("WAIT"),
-    }
-}
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// === Main =====================================================================
 
 fn main() {
-    let my_id = read_int();
-    let width  = read_int() as usize;
-    let height = read_int() as usize;
+    let _my_id = read_int();
+    let width   = read_int() as usize;
+    let height  = read_int() as usize;
 
     let grid: Vec<String> = (0..height).map(|_| read_line()).collect();
     eprintln!("Grid {}x{}:", width, height);
-    for row in &grid {
-        eprintln!("{}", row);
-    }
+    for row in &grid { eprintln!("{}", row); }
 
     let world = World::new(width, height, &grid);
 
@@ -273,111 +343,109 @@ fn main() {
     eprintln!("My snakebots:  {:?}", my_snakebot_ids);
     eprintln!("Opp snakebots: {:?}", opp_snakebot_ids);
 
-    // Objectifs persistants entre les tours : snake_id → cible actuelle
     let mut current_objectives: HashMap<i32, Pos> = HashMap::new();
 
     loop {
-        // ── Lecture des sources d'énergie ─────────────────────────────────
+        // --- Sources d'energie ------------------------------------------------
         let power_source_count = read_int();
         let power_sources: Vec<Pos> = (0..power_source_count)
-            .map(|_| {
-                let v = read_ints();
-                Pos::new(v[0] as usize, v[1] as usize)
-            })
+            .map(|_| { let v = read_ints(); Pos::new(v[0] as usize, v[1] as usize) })
             .collect();
         eprintln!("Power sources: {:?}", power_sources);
 
-        // ── Lecture des snakebots ─────────────────────────────────────────
+        // --- Snakebots --------------------------------------------------------
         let snakebot_count = read_int();
-        let snakebots_raw: Vec<(i32, String)> = (0..snakebot_count)
+        let snakebots: Vec<(i32, Vec<Pos>)> = (0..snakebot_count)
             .map(|_| {
                 let line = read_line();
                 let mut parts = line.splitn(2, ' ');
                 let id   = parts.next().unwrap().parse().unwrap();
-                let body = parts.next().unwrap().to_string();
+                let body = parse_body(parts.next().unwrap());
                 (id, body)
             })
             .collect();
 
-        // Parse corps de chaque snake
-        let snakebots: Vec<(i32, Vec<Pos>)> = snakebots_raw
-            .iter()
-            .map(|(id, body)| (*id, parse_body(body)))
-            .collect();
-
-        // ── Construire l'ensemble des cases bloquées (tous les corps) ─────
+        // --- Blocked global ---------------------------------------------------
         let mut blocked: HashSet<Pos> = HashSet::new();
         for (_, body) in &snakebots {
-            for &pos in body {
-                blocked.insert(pos);
-            }
+            for &pos in body { blocked.insert(pos); }
         }
 
-        // ── Récupérer les têtes de mes snakes ─────────────────────────────
-        let my_snakes: Vec<(i32, Pos)> = snakebots
-            .iter()
+        // --- Tetes ------------------------------------------------------------
+        let my_snakes: Vec<(i32, Pos)> = snakebots.iter()
             .filter(|(id, _)| my_snakebot_ids.contains(id))
             .map(|(id, body)| (*id, body[0]))
             .collect();
 
-        // ── Invalider les objectifs déjà atteints ou disparus ─────────────
+        let enemy_heads: Vec<Pos> = snakebots.iter()
+            .filter(|(id, _)| opp_snakebot_ids.contains(id))
+            .map(|(_, body)| body[0])
+            .collect();
+
+        let danger = enemy_danger_zone(&enemy_heads, &world);
+
+        // --- Invalidation des objectifs ---------------------------------------
         let power_set: HashSet<Pos> = power_sources.iter().copied().collect();
         current_objectives.retain(|_, target| power_set.contains(target));
 
-        // Invalider les objectifs partagés (deux snakes sur la même cible après une disparition)
+        // Supprimer les doublons (garder le snake avec le plus petit ID)
         {
-            let mut seen_targets: HashSet<Pos> = HashSet::new();
+            let mut seen: HashSet<Pos> = HashSet::new();
             let mut to_remove: Vec<i32> = Vec::new();
-            for (id, target) in &current_objectives {
-                if !seen_targets.insert(*target) {
-                    to_remove.push(*id);
-                }
+            let mut pairs: Vec<(i32, Pos)> = current_objectives
+                .iter().map(|(&id, &p)| (id, p)).collect();
+            pairs.sort_by_key(|(id, _)| *id);
+            for (id, target) in pairs {
+                if !seen.insert(target) { to_remove.push(id); }
             }
-            for id in to_remove {
-                current_objectives.remove(&id);
-            }
+            for id in to_remove { current_objectives.remove(&id); }
         }
 
-        // ── Identifier les snakes sans objectif ───────────────────────────
-        let unassigned: Vec<(i32, Pos)> = my_snakes
-            .iter()
+        // --- Nouveaux objectifs -----------------------------------------------
+        let unassigned: Vec<(i32, Pos)> = my_snakes.iter()
             .filter(|(id, _)| !current_objectives.contains_key(id))
-            .cloned()
-            .collect();
+            .cloned().collect();
 
-        // Sources encore libres (non attribuées)
         let assigned_targets: HashSet<Pos> = current_objectives.values().copied().collect();
-        let free_sources: Vec<Pos> = power_sources
-            .iter()
+        let free_sources: Vec<Pos> = power_sources.iter()
             .filter(|&&ps| !assigned_targets.contains(&ps))
-            .copied()
-            .collect();
+            .copied().collect();
 
-        // Attribuer de nouveaux objectifs aux snakes non assignés
         let new_assignments = assign_objectives(&unassigned, &free_sources, &world, &blocked);
         for (id, target) in new_assignments {
-            eprintln!("Snake {} → new objective {:?}", id, target);
+            eprintln!("Snake {} -> objectif {:?}", id, target);
             current_objectives.insert(id, target);
         }
 
-        // ── Calculer et émettre les actions ───────────────────────────────
+        // --- Actions avec reservation progressive ----------------------------
+        // Chaque snake, une fois son mouvement decide, reserve sa future tete
+        // dans working_blocked pour que les snakes traites apres l'evitent.
         let mut actions: Vec<String> = Vec::new();
+        let mut working_blocked = blocked.clone();
 
-        for (id, head) in &my_snakes {
-            let dir = if let Some(&target) = current_objectives.get(id) {
-                eprintln!("Snake {} at {:?} → target {:?}", id, head, target);
-                // Cases bloquées sauf la queue (la queue bougera avant)
-                bfs(*head, target, &world, &blocked)
-                    .or_else(|| fallback_dir(*head, &world, &blocked))
-            } else {
-                // Pas d'objectif disponible : direction sûre
-                eprintln!("Snake {} at {:?}: no objective, fallback", id, head);
-                fallback_dir(*head, &world, &blocked)
-            };
+        let mut ordered_snakes = my_snakes.clone();
+        ordered_snakes.sort_by_key(|(id, _)| *id);
 
-            match dir {
-                Some(d) => actions.push(format!("{} {}", id, d.to_str())),
-                None    => {} // ne rien faire pour ce snake
+        for (id, head) in &ordered_snakes {
+            let own_body: Vec<Pos> = snakebots.iter()
+                .find(|(sid, _)| sid == id)
+                .map(|(_, body)| body.clone())
+                .unwrap_or_default();
+
+            let target = current_objectives.get(id).copied();
+
+            let dir = choose_dir(
+                *id, *head, &own_body, target,
+                &world, &working_blocked, &danger,
+            );
+
+            if let Some(d) = dir {
+                if let Some(next_head) = d.apply(*head, world.width, world.height) {
+                    // Reserver la future tete pour les snakes traites apres
+                    working_blocked.insert(next_head);
+                    eprintln!("Snake {} : {} (reserve {:?})", id, d.to_str(), next_head);
+                }
+                actions.push(format!("{} {}", id, d.to_str()));
             }
         }
 
