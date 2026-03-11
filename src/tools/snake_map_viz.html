@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SNAKE BYTE — MAP VIEWER</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #080c10;
+    --panel:     #0d1117;
+    --border:    #1a2a1a;
+    --green:     #00ff88;
+    --green-dim: #006633;
+    --wall:      #ff4444;
+    --wall-dim:  #3a1010;
+    --grid-line: #0d1f0d;
+    --text:      #a0c4a0;
+    --glow: 0 0 8px #00ff8866;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0,255,136,0.015) 2px, rgba(0,255,136,0.015) 4px
+    );
+    pointer-events: none; z-index: 0;
+  }
+
+  .header {
+    text-align: center;
+    margin-bottom: 28px;
+    position: relative; z-index: 1;
+  }
+
+  .header h1 {
+    font-family: 'Orbitron', monospace;
+    font-weight: 900;
+    font-size: clamp(20px, 4vw, 36px);
+    color: var(--green);
+    text-shadow: 0 0 20px #00ff8888, 0 0 40px #00ff8844;
+    letter-spacing: 4px;
+    animation: flicker 6s infinite;
+  }
+
+  .header .subtitle {
+    font-size: 11px;
+    letter-spacing: 6px;
+    color: var(--green-dim);
+    margin-top: 6px;
+    text-transform: uppercase;
+  }
+
+  @keyframes flicker {
+    0%,94%,96%,98%,100% { opacity:1; }
+    95%,97%,99%          { opacity:0.85; }
+  }
+
+  .main-layout {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    width: 100%;
+    max-width: 1100px;
+    position: relative; z-index: 1;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px;
+    box-shadow: 0 0 20px rgba(0,255,136,0.05), inset 0 0 30px rgba(0,0,0,0.5);
+  }
+
+  .panel-title {
+    font-family: 'Orbitron', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--green-dim);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* MAP */
+  .map-panel { flex: 1; min-width: 0; overflow-x: auto; }
+
+  #map-container {
+    display: inline-flex;
+    flex-direction: column;
+    border: 1px solid var(--green-dim);
+    box-shadow: var(--glow);
+    cursor: crosshair;
+  }
+
+  .map-row { display: flex; }
+
+  .cell {
+    width: 32px; height: 32px;
+    border: 1px solid var(--grid-line);
+    position: relative;
+    transition: filter 0.1s;
+    user-select: none;
+  }
+  .cell:hover { filter: brightness(2); z-index: 2; }
+
+  .cell-empty { background: #090e09; }
+
+  .cell-wall { background: var(--wall-dim); }
+  .cell-wall::after {
+    content: '';
+    position: absolute; inset: 2px;
+    background: repeating-linear-gradient(
+      45deg, var(--wall-dim), var(--wall-dim) 3px,
+      #2a0808 3px, #2a0808 6px
+    );
+    opacity: 0.6;
+  }
+
+  #coord-display {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #00e5ff;
+    min-height: 16px;
+    letter-spacing: 1px;
+  }
+
+  /* SIDEBAR */
+  .sidebar { width: 230px; flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; }
+
+  .map-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 360px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+  }
+
+  .map-list::-webkit-scrollbar { width: 4px; }
+  .map-list::-webkit-scrollbar-track { background: #060a06; }
+  .map-list::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 2px; }
+
+  .map-item {
+    padding: 7px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    transition: all 0.12s;
+    color: var(--text);
+    letter-spacing: 1px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .map-item:hover  { border-color: var(--green-dim); color: var(--green); background: #0a140a; }
+  .map-item.active { border-color: var(--green); color: var(--green); background: #0d1f0d; box-shadow: var(--glow); }
+  .map-item .dim   { color: var(--green-dim); font-size: 10px; }
+  .map-item.active .dim { color: var(--green); opacity: 0.6; }
+
+  .btn-open {
+    width: 100%;
+    padding: 9px;
+    background: transparent;
+    border: 1px solid var(--green);
+    color: var(--green);
+    font-family: 'Orbitron', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    text-transform: uppercase;
+    border-radius: 2px;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+  .btn-open:hover { background: rgba(0,255,136,0.08); box-shadow: var(--glow); }
+
+  .empty-hint { font-size: 11px; color: var(--green-dim); line-height: 1.8; padding: 4px 0; }
+  .error-msg  { color: #ff4444; font-size: 11px; margin-top: 6px; min-height: 14px; }
+
+  .legend { display: flex; flex-direction: column; gap: 6px; }
+  .legend-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+  .legend-swatch { width: 18px; height: 18px; border-radius: 2px; border: 1px solid #333; flex-shrink: 0; }
+
+  @media (max-width: 700px) {
+    .main-layout { flex-direction: column-reverse; }
+    .sidebar { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>SNAKE BYTE</h1>
+  <div class="subtitle">Map Visualizer · Winter Challenge 2026</div>
+</div>
+
+<div class="main-layout">
+
+  <div class="panel map-panel">
+    <div class="panel-title">// Grid Output</div>
+    <div id="map-container">
+      <div style="color:var(--green-dim);font-size:12px;padding:24px 32px;">
+        ← select a map to render
+      </div>
+    </div>
+    <div id="coord-display"></div>
+  </div>
+
+  <div class="sidebar">
+    <div class="panel">
+      <div class="panel-title">
+        // Maps <span id="map-count" style="color:var(--green);"></span>
+      </div>
+      <div class="map-list" id="map-list">
+        <div class="empty-hint">Loading…</div>
+      </div>
+      <button class="btn-open" onclick="autoLoad()">↺ RELOAD</button>
+      <div class="error-msg" id="error-msg"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">// Legend</div>
+      <div class="legend">
+        <div class="legend-row">
+          <div class="legend-swatch" style="background:#090e09; border-color:#0d1f0d;"></div>
+          Empty
+        </div>
+        <div class="legend-row">
+          <div class="legend-swatch" style="background:var(--wall-dim); border-color:var(--wall);"></div>
+          Wall
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const maps = [];
+let active = -1;
+const DATA_DIR = '../../data/';
+
+// ── Auto-load via fetch ──────────────────────────────────────────────────────
+// Tries map_1.json, map_2.json, … until fetch returns non-ok or errors.
+// Requires a local HTTP server (e.g. python -m http.server).
+async function autoLoad() {
+  const errEl = document.getElementById('error-msg');
+  errEl.innerHTML = '';
+  maps.length = 0;
+  active = -1;
+  setStatus('scanning…');
+
+  let i = 1;
+  while (true) {
+    const filename = `map_${i}.json`;
+    try {
+      const res = await fetch(DATA_DIR + filename);
+      if (!res.ok) break;
+      const text = await res.text();
+      try { maps.push(parseMap(filename, text)); }
+      catch(err) { console.warn(filename, err.message); }
+      i++;
+    } catch(_) { break; }
+  }
+
+  setStatus(maps.length ? `(${maps.length})` : '');
+
+  if (!maps.length) {
+    errEl.innerHTML =
+      '✕ No maps found.<br>' +
+      '<span style="opacity:.7">Serve with:<br><code>python -m http.server</code></span>';
+    document.getElementById('map-list').innerHTML =
+      '<div class="empty-hint">No maps at<br>../../data/map_N.json</div>';
+    return;
+  }
+
+  renderSidebar();
+  selectMap(0);
+}
+
+function setStatus(msg) {
+  document.getElementById('map-count').textContent = msg;
+}
+
+// ── RLE decoder ──────────────────────────────────────────────────────────────
+function decodeRLE(rle, w, h) {
+  const grid = [];
+  for (const rowRle of rle.split(';')) {
+    if (rowRle === '') continue;
+    let row = '';
+    for (const m of rowRle.matchAll(/(\d*)([.#])/g)) {
+      const count = m[1] === '' ? 1 : parseInt(m[1]);
+      row += m[2].repeat(count);
+    }
+    grid.push(row.split(''));
+  }
+  if (grid.length !== h) throw new Error(`RLE: expected ${h} rows, got ${grid.length}`);
+  return grid;
+}
+
+// ── Parse ────────────────────────────────────────────────────────────────────
+function parseMap(filename, raw) {
+  const data = JSON.parse(raw);
+  const [w, h] = data.dimensions;
+  const grid = typeof data.grid === 'string'
+    ? decodeRLE(data.grid, w, h)
+    : data.grid.map(row => typeof row === 'string' ? row.split('') : row);
+  return { name: filename, width: w, height: h, grid };
+}
+
+// ── Sidebar ──────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const list = document.getElementById('map-list');
+  list.innerHTML = maps.map((m, i) => `
+    <div class="map-item${i === active ? ' active' : ''}" onclick="selectMap(${i})">
+      <span>${m.name.replace('.json','')}</span>
+      <span class="dim">${m.width}×${m.height}</span>
+    </div>
+  `).join('');
+}
+
+function selectMap(idx) {
+  active = idx;
+  renderSidebar();
+  renderMap(maps[idx]);
+}
+
+// ── Render ───────────────────────────────────────────────────────────────────
+function renderMap(map) {
+  const container = document.getElementById('map-container');
+  container.innerHTML = '';
+
+  for (let y = 0; y < map.height; y++) {
+    const row = document.createElement('div');
+    row.className = 'map-row';
+    for (let x = 0; x < map.width; x++) {
+      const ch = map.grid[y]?.[x] ?? '.';
+      const cell = document.createElement('div');
+      cell.className = 'cell ' + (ch === '#' ? 'cell-wall' : 'cell-empty');
+      cell.addEventListener('mouseenter', () => {
+        document.getElementById('coord-display').textContent =
+          `x=${x}  y=${y}  →  [${ch === '#' ? 'WALL' : 'EMPTY'}]`;
+      });
+      row.appendChild(cell);
+    }
+    container.appendChild(row);
+  }
+  document.getElementById('coord-display').textContent = '';
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+autoLoad();
+</script>
+</body>
+</html>
