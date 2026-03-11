@@ -212,7 +212,13 @@ fn snakes_map(world: &World) -> Vec<Vec<String>> {
     let mut map = vec![vec![".".to_string(); world.width]; world.height];
     for (id, body) in &world.snakebots {
         for (i, pos) in body.iter().enumerate() {
-            map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { format!("B{}", id) };
+            // AVANT : pas de vérification → panic si pos hors grille
+            map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { format!("b") };
+
+            // APRÈS : guard sur les bornes
+            if pos.x < world.width && pos.y < world.height {
+                map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { format!("b") };
+            }
         }
     }
     map
@@ -221,7 +227,9 @@ fn snakes_map(world: &World) -> Vec<Vec<String>> {
 fn power_sources_map(world: &World) -> Vec<Vec<String>> {
     let mut map = vec![vec![".".to_string(); world.width]; world.height];
     for pos in &world.power_sources {
-        map[pos.y][pos.x] = "P".to_string();
+        if pos.x < world.width && pos.y < world.height {
+            map[pos.y][pos.x] = "P".to_string();
+        }
     }
     map
 }
