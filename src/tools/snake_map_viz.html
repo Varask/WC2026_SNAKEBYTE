@@ -123,7 +123,7 @@
 
   .cell-empty { background: #090e09; }
 
-  .cell-wall { background: var(--wall-dim); }
+  .cell-wall { background: var(--wall-dim); cursor: not-allowed; }
   .cell-wall::after {
     content: '';
     position: absolute; inset: 2px;
@@ -134,6 +134,32 @@
     opacity: 0.6;
   }
 
+  /* floor cell selected as snake origin (cellPos) */
+  .cell-origin {
+    background: #1a0f00 !important;
+    box-shadow: inset 0 0 10px #ff990099;
+  }
+  .cell-origin::before {
+    content: '▼';
+    position: absolute;
+    font-size: 11px;
+    color: #ff9900;
+    line-height: 32px;
+    z-index: 2;
+  }
+
+  /* reachable zone highlight */
+  .cell-reachable {
+    background: #001a0f !important;
+    box-shadow: inset 0 0 8px #00ff8866;
+  }
+  .cell-reachable::before {
+    content: '';
+    position: absolute; inset: 6px;
+    background: #00ff8822;
+    border-radius: 2px;
+  }
+
   #coord-display {
     margin-top: 8px;
     font-size: 11px;
@@ -141,6 +167,26 @@
     min-height: 16px;
     letter-spacing: 1px;
   }
+
+  /* length input */
+  .length-row {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .length-row label { font-size: 11px; color: var(--text); white-space: nowrap; }
+  .length-input {
+    width: 64px;
+    background: #060a06;
+    border: 1px solid var(--green-dim);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    padding: 4px 8px;
+    border-radius: 2px;
+    outline: none;
+    text-align: center;
+  }
+  .length-input:focus { border-color: var(--green); box-shadow: var(--glow); }
+  .reach-info { font-size: 11px; color: var(--green-dim); margin-top: 8px; min-height: 14px; }
 
   /* SIDEBAR */
   .sidebar { width: 230px; flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; }
@@ -237,6 +283,16 @@
     </div>
 
     <div class="panel">
+      <div class="panel-title">// Reachability</div>
+      <div class="length-row">
+        <label>Snake length</label>
+        <input class="length-input" type="number" id="snake-length" value="3" min="1" max="99"
+               oninput="onLengthChange()" />
+      </div>
+      <div class="reach-info" id="reach-info">click a wall cell to set origin</div>
+    </div>
+
+    <div class="panel">
       <div class="panel-title">// Legend</div>
       <div class="legend">
         <div class="legend-row">
@@ -247,6 +303,18 @@
           <div class="legend-swatch" style="background:var(--wall-dim); border-color:var(--wall);"></div>
           Wall
         </div>
+        <div class="legend-row">
+          <div class="legend-swatch" style="background:#001a0f; border-color:#00ff8844; position:relative;">
+            <div style="position:absolute;inset:3px;background:#00ff8822;border-radius:1px;"></div>
+          </div>
+          Reachable
+        </div>
+        <div class="legend-row">
+          <div class="legend-swatch" style="background:#1a0f00; border-color:#ff990066; position:relative;">
+            <span style="position:absolute;font-size:9px;color:#ff9900;line-height:18px;">&#9660;</span>
+          </div>
+          Origin (floor)
+        </div>
       </div>
     </div>
   </div>
@@ -255,17 +323,17 @@
 
 <script>
 const maps = [];
-let active = -1;
+let active   = -1;
+let originPos = null;   // {x, y} of the selected floor cell (cellPos)
 const DATA_DIR = '../../data/';
 
-// ── Auto-load via fetch ──────────────────────────────────────────────────────
-// Tries map_1.json, map_2.json, … until fetch returns non-ok or errors.
-// Requires a local HTTP server (e.g. python -m http.server).
+// ── Auto-load ────────────────────────────────────────────────────────────────
 async function autoLoad() {
   const errEl = document.getElementById('error-msg');
   errEl.innerHTML = '';
   maps.length = 0;
   active = -1;
+  originPos = null;
   setStatus('scanning…');
 
   let i = 1;
@@ -282,23 +350,17 @@ async function autoLoad() {
   }
 
   setStatus(maps.length ? `(${maps.length})` : '');
-
   if (!maps.length) {
-    errEl.innerHTML =
-      '✕ No maps found.<br>' +
-      '<span style="opacity:.7">Serve with:<br><code>python -m http.server</code></span>';
+    errEl.innerHTML = '✕ No maps found.<br><span style="opacity:.7">python -m http.server</span>';
     document.getElementById('map-list').innerHTML =
       '<div class="empty-hint">No maps at<br>../../data/map_N.json</div>';
     return;
   }
-
   renderSidebar();
   selectMap(0);
 }
 
-function setStatus(msg) {
-  document.getElementById('map-count').textContent = msg;
-}
+function setStatus(msg) { document.getElementById('map-count').textContent = msg; }
 
 // ── RLE decoder ──────────────────────────────────────────────────────────────
 function decodeRLE(rle, w, h) {
@@ -332,15 +394,117 @@ function renderSidebar() {
   list.innerHTML = maps.map((m, i) => `
     <div class="map-item${i === active ? ' active' : ''}" onclick="selectMap(${i})">
       <span>${m.name.replace('.json','')}</span>
-      <span class="dim">${m.width}×${m.height}</span>
+      <span class="dim">${m.width}\u00d7${m.height}</span>
     </div>
   `).join('');
 }
 
 function selectMap(idx) {
   active = idx;
+  originPos = null;
   renderSidebar();
   renderMap(maps[idx]);
+  document.getElementById('reach-info').textContent = 'click a wall cell to set origin';
+}
+
+// ── Reachability ─────────────────────────────────────────────────────────────
+function getSnakeLength() {
+  return Math.max(1, parseInt(document.getElementById('snake-length').value) || 3);
+}
+
+function onLengthChange() {
+  if (originPos && active >= 0) computeAndHighlight(maps[active], originPos);
+}
+
+// cellPos = {x, y} of the FLOOR (wall) cell clicked
+// snake tail = {x, y-1} (cell above the floor)
+function reachableZones(map, length, cellPos) {
+  const DIRS = [
+    { dx:  0, dy: -1 },
+    { dx:  0, dy:  1 },
+    { dx: -1, dy:  0 },
+    { dx:  1, dy:  0 },
+  ];
+
+  const walkable = (x, y) =>
+    y >= 0 && y < map.height &&
+    x >= 0 && x < map.width  &&
+    map.grid[y][x] !== '#';
+
+  // Can the snake reverse from (x,y) coming from dir?
+  // Needs (length-1) free cells in the opposite direction.
+  const canReverse = (x, y, dir) => {
+    let cx = x, cy = y;
+    for (let i = 0; i < length - 1; i++) {
+      cx -= dir.dx; cy -= dir.dy;
+      if (!walkable(cx, cy)) return false;
+    }
+    return true;
+  };
+
+  // Tail = one cell above the floor cellPos
+  const startX = cellPos.x;
+  const startY = cellPos.y - 1;
+  if (!walkable(startX, startY)) return new Set();
+
+  const MAX_DIST = length;
+  const reached  = new Set();
+  const visited  = new Set();
+  const queue    = [{ x: startX, y: startY, dir: null, dist: 0 }];
+  reached.add(`${startX},${startY}`);
+
+  while (queue.length > 0) {
+    const { x, y, dir, dist } = queue.shift();
+    if (dist >= MAX_DIST) continue;
+
+    const stateKey = `${x},${y},${dir ? `${dir.dx},${dir.dy}` : '*'}`;
+    if (visited.has(stateKey)) continue;
+    visited.add(stateKey);
+
+    for (const nextDir of DIRS) {
+      const nx = x + nextDir.dx;
+      const ny = y + nextDir.dy;
+      if (!walkable(nx, ny)) continue;
+
+      const isReverse = dir && nextDir.dx === -dir.dx && nextDir.dy === -dir.dy;
+      if (isReverse && !canReverse(x, y, dir)) continue;
+
+      const nextKey = `${nx},${ny},${nextDir.dx},${nextDir.dy}`;
+      if (visited.has(nextKey)) continue;
+
+      reached.add(`${nx},${ny}`);
+      queue.push({ x: nx, y: ny, dir: nextDir, dist: dist + 1 });
+    }
+  }
+
+  return reached;  // Set of "x,y" strings
+}
+
+function computeAndHighlight(map, cellPos) {
+  const length  = getSnakeLength();
+  const reached = reachableZones(map, length, cellPos);
+
+  // Re-apply classes on all cells
+  const container = document.getElementById('map-container');
+  const rows = container.querySelectorAll('.map-row');
+  for (let y = 0; y < map.height; y++) {
+    const cells = rows[y].querySelectorAll('.cell');
+    for (let x = 0; x < map.width; x++) {
+      const cell = cells[x];
+      const ch   = map.grid[y]?.[x] ?? '.';
+      const isOrigin    = x === cellPos.x && y === cellPos.y;
+      const isReachable = reached.has(`${x},${y}`);
+
+      cell.className = 'cell';
+      if (isOrigin)         cell.classList.add('cell-wall', 'cell-origin');
+      else if (ch === '#')  cell.classList.add('cell-wall');
+      else if (isReachable) cell.classList.add('cell-reachable');
+      else                  cell.classList.add('cell-empty');
+    }
+  }
+
+  document.getElementById('reach-info').textContent =
+    `origin (${cellPos.x},${cellPos.y})  |  length ${length}  |  ${reached.size} reachable`;
 }
 
 // ── Render ───────────────────────────────────────────────────────────────────
@@ -352,13 +516,23 @@ function renderMap(map) {
     const row = document.createElement('div');
     row.className = 'map-row';
     for (let x = 0; x < map.width; x++) {
-      const ch = map.grid[y]?.[x] ?? '.';
+      const ch   = map.grid[y]?.[x] ?? '.';
       const cell = document.createElement('div');
       cell.className = 'cell ' + (ch === '#' ? 'cell-wall' : 'cell-empty');
+
       cell.addEventListener('mouseenter', () => {
         document.getElementById('coord-display').textContent =
           `x=${x}  y=${y}  →  [${ch === '#' ? 'WALL' : 'EMPTY'}]`;
       });
+
+      // Click on a WALL cell → set as floor origin (cellPos)
+      if (ch === '#') {
+        cell.addEventListener('click', () => {
+          originPos = { x, y };
+          computeAndHighlight(map, originPos);
+        });
+      }
+
       row.appendChild(cell);
     }
     container.appendChild(row);
