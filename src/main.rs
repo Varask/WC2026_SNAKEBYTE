@@ -116,6 +116,7 @@ impl World {
 // === Main =====================================================================
 
 fn main() {
+    // --- Initialisation ------------------------------------------------------
     let _my_id = read_int();
     let width   = read_int() as usize;
     let height  = read_int() as usize;
@@ -123,7 +124,6 @@ fn main() {
     let grid: Vec<String> = (0..height).map(|_| read_line()).collect();
     eprintln!("Grid {}x{}:", width, height);
     for row in &grid { eprintln!("{}", row); }
-
     let world = World::new(width, height, &grid);
 
     let snakebots_per_player = read_int();
@@ -143,15 +143,21 @@ fn main() {
 
         // --- Snakebots --------------------------------------------------------
         let snakebot_count = read_int();
-        let snakebots: Vec<(i32, Vec<Pos>)> = (0..snakebot_count)
+        /* Descrption de la variable snakebots:
+            - Type: HashMap index snake -> Liste de positions (1ere position = tete)
+
+        */
+        let snakebots: HashMap<i32, Vec<Pos>> = (0..snakebot_count)
             .map(|_| {
-                let line = read_line();
-                let mut parts = line.splitn(2, ' ');
-                let id   = parts.next().unwrap().parse().unwrap();
-                let body = parse_body(parts.next().unwrap());
-                (id, body)
+                let id = read_int();
+                let body = read_line();
+                (id, parse_body(&body))
             })
             .collect();
+        eprintln!("Snakebots:");
+        for (id, body) in &snakebots {
+            eprintln!("  {}: {:?}", id, body);
+        }
 
 
         println!("WAIT");
