@@ -207,17 +207,12 @@ fn walls_map(world: &World) -> Vec<Vec<String>> {
         }).collect()
     }).collect()
 }
-
 fn snakes_map(world: &World) -> Vec<Vec<String>> {
     let mut map = vec![vec![".".to_string(); world.width]; world.height];
     for (id, body) in &world.snakebots {
         for (i, pos) in body.iter().enumerate() {
-            // AVANT : pas de vérification → panic si pos hors grille
-            map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { format!("b") };
-
-            // APRÈS : guard sur les bornes
             if pos.x < world.width && pos.y < world.height {
-                map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { format!("b") };
+                map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { "b".to_string() };
             }
         }
     }
@@ -234,29 +229,41 @@ fn power_sources_map(world: &World) -> Vec<Vec<String>> {
     map
 }
 
-fn eprint_walls_map(world: &World) {
+fn eprint_empty_world(world: &World) {
+    // print the walls only (for debugging) using walls_map
     let walls = walls_map(world);
-    for row in walls {
-        eprintln!("{}", row.join(""));
+    for y in 0..world.height {
+        let mut line = String::new();
+        for x in 0..world.width {
+            line.push_str(&format!("{:<3}", walls[y][x]));
+        }
+        eprintln!("{}", line);
     }
+
 }
 
 fn eprint_full_world(world: &World) {
-    let walls = walls_map(world);
+    let walls  = walls_map(world);
     let snakes = snakes_map(world);
     let powers = power_sources_map(world);
 
     for y in 0..world.height {
         let mut line = String::new();
         for x in 0..world.width {
-            line.push_str(&powers[y][x]);
-            line.push_str(&snakes[y][x]);
-            line.push_str(&walls[y][x]);
+            let cell = if walls[y][x] == "#" {
+                "#".to_string()
+            } else if powers[y][x] == "P" {
+                "P".to_string()
+            } else if snakes[y][x] != "." {
+                snakes[y][x].clone()
+            } else {
+                ".".to_string()
+            };
+            line.push_str(&format!("{:<3}", cell));
         }
         eprintln!("{}", line);
     }
 }
-
 
 
 // === Main =====================================================================
@@ -303,6 +310,8 @@ fn main() {
         
         world.update_snakebots(snakebots);
 
+
+        eprint_empty_world(&world);
         eprint_full_world(&world);
 
 
