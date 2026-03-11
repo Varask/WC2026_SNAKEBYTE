@@ -212,7 +212,7 @@ fn snakes_map(world: &World) -> Vec<Vec<String>> {
     for (id, body) in &world.snakebots {
         for (i, pos) in body.iter().enumerate() {
             if pos.x < world.width && pos.y < world.height {
-                map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { "b".to_string() };
+                map[pos.y][pos.x] = if i == 0 { format!("H{}", id) } else { format!("b{}", id) };
             }
         }
     }
@@ -239,7 +239,6 @@ fn eprint_empty_world(world: &World) {
         }
         eprintln!("{}", line);
     }
-
 }
 
 fn eprint_full_world(world: &World) {
@@ -311,7 +310,6 @@ fn main() {
         world.update_snakebots(snakebots);
 
 
-        eprint_empty_world(&world);
         eprint_full_world(&world);
 
 
