@@ -293,7 +293,7 @@ fn main() {
             .collect();
 
 
-        world.eprint_full_world(&snakebots);
+        eprint_full_world(&world);
 
 
         println!("WAIT");
