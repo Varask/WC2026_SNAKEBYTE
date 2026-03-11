@@ -21,6 +21,7 @@ fn read_ints() -> Vec<i32> {
         .collect()
 }
 
+
 // === Types de base =============================================================
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -193,7 +194,7 @@ impl World {
     }
 }
 
-// === Debug Utilities ==========================================================
+// === Debug Print Utilities ==========================================================
 
 // Generer une vis 2D du monde dans stderr (pour debug)
 //   - overlay de chaques element (murs, snakesbots, sources d'energie)
@@ -259,7 +260,7 @@ fn main() {
     let height  = read_int() as usize;
     let grid: Vec<String> = (0..height).map(|_| read_line()).collect();
 
-    let world = World::new(width, height, &grid);
+    let mut world = World::new(width, height, &grid);
 
     eprint_full_world(&world);
 
@@ -276,8 +277,8 @@ fn main() {
         let power_sources: Vec<Pos> = (0..power_source_count)
             .map(|_| { let v = read_ints(); Pos::new(v[0] as usize, v[1] as usize) })
             .collect();
-        eprintln!("Power sources: {:?}", power_sources);
-
+        
+        world.update_power_sources(power_sources);
         // --- Snakebots --------------------------------------------------------
         let snakebot_count = read_int();
 
@@ -291,7 +292,8 @@ fn main() {
                 (id, parse_body(body))
             })
             .collect();
-
+        
+        world.update_snakebots(snakebots);
 
         eprint_full_world(&world);
 
@@ -301,7 +303,56 @@ fn main() {
     }
 }
 
+/*
+========== PARTIE A NE PAS INCLURE DANS LE SCRIPT FINAL CODINGAME ==========
+- Lecture des fichiers JSON de maps pour tester localement sans passer par le moteur de jeu.
+- Tests unitaires pour les fonctions de base (Pos, Dir, World) afin de vérifier leur bon fonctionnement indépendamment du moteur de jeu.
 
+*/
+// === JSON Map Loader =========================================================
+fn decode_rle_row(row: &str) -> String {
+    let mut result = String::new();
+    let mut num_buf = String::new();
+
+    for c in row.chars() {
+        if c.is_ascii_digit() {
+            num_buf.push(c);
+        } else {
+            let count = if num_buf.is_empty() {
+                1
+            } else {
+                num_buf.parse::<usize>().unwrap()
+            };
+            num_buf.clear();
+            for _ in 0..count {
+                result.push(c);
+            }
+        }
+    }
+    result
+}
+
+fn load_map_from_json(filepath: &str) -> World {
+    let file_content = std::fs::read_to_string(filepath).expect("Failed to read map file");
+    let json: serde_json::Value = serde_json::from_str(&file_content).expect("Failed to parse JSON");
+
+    let dimensions = json["dimensions"].as_array().expect("Missing dimensions");
+    let width  = dimensions[0].as_u64().unwrap() as usize;
+    let height = dimensions[1].as_u64().unwrap() as usize;
+
+    let grid_str = json["grid"].as_str().expect("Missing grid");
+    let grid: Vec<String> = grid_str
+        .split(';')
+        .map(|row| decode_rle_row(row))
+        .collect();
+
+    assert_eq!(grid.len(), height, "Row count mismatch");
+    assert!(grid.iter().all(|r| r.len() == width), "Column width mismatch");
+
+    World::new(width, height, &grid)
+}
+
+// === Tests unitaires =========================================================
 
 #[cfg(test)]
 mod pos_tests {
