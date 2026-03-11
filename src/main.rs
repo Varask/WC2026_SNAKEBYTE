@@ -133,8 +133,6 @@ fn main() {
     eprintln!("My snakebots:  {:?}", my_snakebot_ids);
     eprintln!("Opp snakebots: {:?}", opp_snakebot_ids);
 
-    let mut current_objectives: HashMap<i32, Pos> = HashMap::new();
-
     loop {
         // --- Sources d'energie ------------------------------------------------
         let power_source_count = read_int();
