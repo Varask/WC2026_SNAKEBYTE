@@ -112,6 +112,23 @@ impl World {
     }
 }
 
+// === Debug Utilities ==========================================================
+
+fn eprint_world(world: &World) {
+    eprintln!("World: {}x{}", world.width, world.height);
+    eprintln!("Walls:");
+    for wall in &world.walls {
+        eprintln!("  {:?}", wall);
+    }
+}
+
+
+fn eprint_snakebots(snakebots: &HashMap<i32, Vec<Pos>>) {
+    eprintln!("Snakebots:");
+    for (id, body) in snakebots {
+        eprintln!("  {}: {:?}", id, body);
+    }
+}
 
 // === Main =====================================================================
 
@@ -120,11 +137,14 @@ fn main() {
     let _my_id = read_int();
     let width   = read_int() as usize;
     let height  = read_int() as usize;
-
     let grid: Vec<String> = (0..height).map(|_| read_line()).collect();
-    eprintln!("Grid {}x{}:", width, height);
-    for row in &grid { eprintln!("{}", row); }
+
     let world = World::new(width, height, &grid);
+
+    eprint_world(&world);
+
+
+
 
     let snakebots_per_player = read_int();
     let my_snakebot_ids:  Vec<i32> = (0..snakebots_per_player).map(|_| read_int()).collect();
@@ -143,21 +163,20 @@ fn main() {
 
         // --- Snakebots --------------------------------------------------------
         let snakebot_count = read_int();
-        /* Descrption de la variable snakebots:
-            - Type: HashMap index snake -> Liste de positions (1ere position = tete)
 
-        */
+        // Parse snakebots: map of snake ID to body positions (head first)
         let snakebots: HashMap<i32, Vec<Pos>> = (0..snakebot_count)
             .map(|_| {
-                let id = read_int();
-                let body = read_line();
-                (id, parse_body(&body))
+                let line = read_line();  // lire toute la ligne d'un coup
+                let mut parts = line.splitn(2, ' ');
+                let id: i32 = parts.next().unwrap().parse().unwrap();
+                let body = parts.next().unwrap();
+                (id, parse_body(body))
             })
             .collect();
-        eprintln!("Snakebots:");
-        for (id, body) in &snakebots {
-            eprintln!("  {}: {:?}", id, body);
-        }
+
+
+        eprint_snakebots(&snakebots);
 
 
         println!("WAIT");
